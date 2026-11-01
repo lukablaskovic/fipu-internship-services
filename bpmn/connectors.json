@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "namespace": "urn:fipu:bpmn:1",
+  "connectors": [
+    {
+      "id": "baserow",
+      "label": "Baserow · podaci o praksi",
+      "methods": ["GET", "POST", "PATCH"],
+      "operations": [
+        {"method": "POST", "url": "/api/student_preferencije", "label": "Spremi preferencije"},
+        {"method": "POST", "url": "/api/alokacija", "label": "Spremi alokaciju"},
+        {"method": "GET", "url": "/api/alokacija/public", "label": "Dohvati alokaciju"},
+        {"method": "GET", "url": "/api/poslodavac/zadatak", "label": "Dohvati poslodavca i zadatak"},
+        {"method": "PATCH", "url": "/api/status_zahtjeva", "label": "Promijeni status zahtjeva"},
+        {"method": "POST", "url": "/api/prijavnica", "label": "Spremi prijavnicu"},
+        {"method": "POST", "url": "/api/dnevnik", "label": "Spremi dnevnik"}
+      ]
+    },
+    {
+      "id": "sendgrid",
+      "label": "E-mail · EmailJS",
+      "methods": ["POST"],
+      "operations": [{"method": "POST", "url": "/email", "label": "Pošalji poruku"}],
+      "templates": ["mentor_potvrda_pdf", "poslodavac_after_allocation", "student_after_allocation", "student_after_approval", "student_after_refusal", "student_after_return", "student_potvrda_pdf", "model_b_student_odobren_zadatak"]
+    },
+    {
+      "id": "pdf",
+      "label": "PDF · potvrda o praksi",
+      "methods": ["POST"],
+      "operations": [{"method": "POST", "url": "/api/potvrda", "label": "Izradi potvrdu"}]
+    }
+  ]
+}
