@@ -15,3 +15,4 @@ urllib3==1.26.6
 uuid==1.30
 WebOb==1.8.7
 yarl==1.6.3
+google-auth==2.40.3

@@ -48,6 +48,9 @@ if br.LOCAL_CONFIG:
 
 client = BaserowClient()
 
+from avatar import register_avatar_route
+register_avatar_route(routes, client, TABLES_MAP["Student"], br.Student_Mappings, bool(br.LOCAL_CONFIG))
+
 
 @routes.post("/api/student")
 async def add_new_student(req):
