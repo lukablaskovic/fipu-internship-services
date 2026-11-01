@@ -48,6 +48,9 @@ if br.LOCAL_CONFIG:
 
 client = BaserowClient()
 
+from academic_years import register_academic_year_routes
+register_academic_year_routes(routes, os.getenv("ACADEMIC_ARCHIVE_DIR"), bool(br.LOCAL_CONFIG))
+
 from avatar import register_avatar_route
 register_avatar_route(routes, client, TABLES_MAP["Student"], br.Student_Mappings, bool(br.LOCAL_CONFIG))
 
