@@ -43,6 +43,9 @@ TABLES_MAP = {
 }
 
 
+if br.LOCAL_CONFIG:
+    TABLES_MAP = br.LOCAL_CONFIG["tables"]
+
 client = BaserowClient()
 
 

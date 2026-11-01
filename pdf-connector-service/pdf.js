@@ -35,7 +35,14 @@ async function generatePDFContent(page, jsonData) {
     taskDescription.length > 700 ? "index-long.html" : "index.html";
 
   const htmlTemplate = await fs.readFile(templateFile, "utf8");
-  const htmlContent = replacePlaceholders(htmlTemplate, jsonData);
+  let htmlContent = replacePlaceholders(htmlTemplate, jsonData);
+  if (process.env.PDF_LOGO_PATH) {
+    const logo = await fs.readFile(process.env.PDF_LOGO_PATH);
+    htmlContent = htmlContent.replaceAll(
+      "https://fipu.unipu.hr/_pub/themes_static/unipu2020/fipu/icons/fipu_hr.png",
+      `data:image/png;base64,${logo.toString("base64")}`
+    );
+  }
   await page.setContent(htmlContent);
 }
 

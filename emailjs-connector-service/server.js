@@ -78,6 +78,17 @@ app.post("/email", (req, res) => {
 
     const emailTitle = titleMap[templateName] || "FIPU Praksa";
 
+    if (process.env.MAILPIT_URL) {
+      axios.post(`${process.env.MAILPIT_URL}/api/v1/send`, {
+        From: { Email: "praksa@local.test", Name: "FIPU Praksa" },
+        To: [{ Email: toEmail }],
+        Subject: emailTitle,
+        HTML: htmlContent,
+      }).then(() => res.send("Email captured locally."))
+        .catch(() => res.status(502).send("Local mail inbox is unavailable."));
+      return;
+    }
+
     const templateParams = {
       message: htmlContent,
       to_email: toEmail,

@@ -1,11 +1,14 @@
 import os
+import json
+from pathlib import Path
 from dotenv import load_dotenv
 from urllib.parse import quote
 import requests
 
 load_dotenv()
 
-DATABASE_TOKEN = os.getenv("BASEROW_TOKEN")
+LOCAL_CONFIG = json.loads(Path(os.environ["BASEROW_CONFIG_FILE"]).read_text()) if os.getenv("BASEROW_CONFIG_FILE") else None
+DATABASE_TOKEN = LOCAL_CONFIG["token"] if LOCAL_CONFIG else os.getenv("BASEROW_TOKEN")
 BASE_URL = os.getenv("BASE_URL")
 
 if DATABASE_TOKEN is None:
@@ -20,9 +23,12 @@ POST_PATCH_HEADER = {
     "Content-Type": "application/json",
 }
 
-print("POST_PATCH_HEADER", POST_PATCH_HEADER)
 
 from mappings import *
+
+if LOCAL_CONFIG:
+    for table, fields in LOCAL_CONFIG["fields"].items():
+        globals()[f"{table}_Mappings"].update(fields)
 
 
 class BaserowClient:
