@@ -1,5 +1,4 @@
 import sendgrid
-import bugsnag
 
 import base64
 import os, sys
@@ -128,29 +127,10 @@ async def status_check(request):
 
 app = None
 
-project_root = os.path.dirname(os.path.abspath(__file__))
-bugsnag.configure(
-    api_key=os.getenv("BUGSNAG"),
-    project_root=project_root,
-)
-
-
-async def bugsnag_middleware(app, handler):
-    async def middleware_handler(request):
-        try:
-            response = await handler(request)
-            return response
-        except Exception as e:
-            bugsnag.notify(e)
-            raise e
-
-    return middleware_handler
-
-
 def run():
     global app
     print(SG)
-    app = web.Application(middlewares=[bugsnag_middleware])
+    app = web.Application()
     app.add_routes(routes)
     cors = aiohttp_cors.setup(
         app,

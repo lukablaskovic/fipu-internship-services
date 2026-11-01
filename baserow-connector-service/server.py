@@ -11,7 +11,6 @@ import os, sys
 from datetime import datetime
 import tempfile
 from dotenv import load_dotenv
-import bugsnag
 import logging
 
 load_dotenv()
@@ -1462,29 +1461,10 @@ async def status_check(request):
     )
 
 
-project_root = os.path.dirname(os.path.abspath(__file__))
-bugsnag.configure(
-    api_key=os.getenv("BCS_BUGSNAG"),
-    project_root=project_root,
-)
-
-
-async def bugsnag_middleware(app, handler):
-    async def middleware_handler(request):
-        try:
-            response = await handler(request)
-            return response
-        except Exception as e:
-            bugsnag.notify(e)
-            raise e
-
-    return middleware_handler
-
-
 def run():
     global app
 
-    app = aiohttp.web.Application(middlewares=[bugsnag_middleware])
+    app = aiohttp.web.Application()
     app.add_routes(routes)
     cors = aiohttp_cors.setup(
         app,
