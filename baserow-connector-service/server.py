@@ -10,6 +10,7 @@ import json
 from baserow import BaserowClient
 import os, sys
 from datetime import datetime
+import hashlib
 import tempfile
 from dotenv import load_dotenv
 import logging
@@ -1383,58 +1384,39 @@ async def store_poslodavac_logo(request):
     return response
 
 
-@routes.post("/api/upload/pdf-dnevnik/{id_dnevnik_prakse}")
-async def store_pdf_dnevnik_prakse(request):
-    diary = owned_row(request, "Dnevnik_prakse", "id_dnevnik_prakse", request.match_info["id_dnevnik_prakse"], br.Dnevnik_prakse_Mappings)
-    logger.info("Received request to store PDF internship diary")
-
-    id_dnevnik_prakse = request.match_info.get("id_dnevnik_prakse")
-    if not id_dnevnik_prakse:
-        logger.error("Missing internship diary ID in request")
-        return aiohttp.web.json_response(
-            {"error": "Missing internship diary ID."}, status=400
-        )
-
-    response = await store_file_in_baserow(
-        request,
-        TABLES_MAP["Dnevnik_prakse"],
-        "id_dnevnik_prakse",
-        id_dnevnik_prakse,
-        br.Dnevnik_prakse_Mappings,
-        "dnevnik_prakse_upload", diary["id"],
-    )
-
-    if "error" in response:
-        logger.error("Error storing PDF internship diary: %s", response["error"])
-
-    return response
-
-
-@routes.post("/api/upload/pdf-ispunjena-potvrda/{id_dnevnik_prakse}")
-async def store_pdf_ispunjena_potvrda(request):
-    diary = owned_row(request, "Dnevnik_prakse", "id_dnevnik_prakse", request.match_info["id_dnevnik_prakse"], br.Dnevnik_prakse_Mappings)
-    logger.info("Received request to store PDF filled confirmation")
-
-    id_dnevnik_prakse = request.match_info.get("id_dnevnik_prakse")
-    if not id_dnevnik_prakse:
-        logger.error("Missing internship diary ID in request")
-        return aiohttp.web.json_response(
-            {"error": "Missing internship diary ID."}, status=400
-        )
-
-    response = await store_file_in_baserow(
-        request,
-        TABLES_MAP["Dnevnik_prakse"],
-        "id_dnevnik_prakse",
-        id_dnevnik_prakse,
-        br.Dnevnik_prakse_Mappings,
-        "ispunjena_potvrda_upload", diary["id"],
-    )
-
-    if "error" in response:
-        logger.error("Error storing PDF filled confirmation: %s", response["error"])
-
-    return response
+@routes.put("/api/diary/{diary_id}/{column}")
+async def store_diary_document(request):
+    column = request.match_info["column"]
+    if column not in {"dnevnik_prakse_upload", "ispunjena_potvrda_upload"}:
+        raise aiohttp.web.HTTPNotFound()
+    limit = 10 * 1024 * 1024
+    content = bytearray()
+    async for chunk in request.content.iter_chunked(65536):
+        content.extend(chunk)
+        if len(content) > limit:
+            raise aiohttp.web.HTTPRequestEntityTooLarge(max_size=limit, actual_size=len(content))
+    if not content.startswith(b"%PDF-"):
+        raise aiohttp.web.HTTPBadRequest(text="Expected PDF")
+    table = TABLES_MAP["Dnevnik_prakse"]
+    row_id = client.get_row_id_by_attribute(table, "id_dnevnik_prakse", request.match_info["diary_id"], br.Dnevnik_prakse_Mappings)
+    if not row_id:
+        raise aiohttp.web.HTTPNotFound()
+    row = client.get_row(table, row_id).get("data")
+    if row is None:
+        raise aiohttp.web.HTTPBadGateway()
+    # A stable stored name lets a retry reuse the first successfully linked PDF.
+    name = column + "-" + hashlib.sha256(content).hexdigest() + ".pdf"
+    if not any(f.get("visible_name") == name for f in row.get(column) or []):
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as pdf:
+            pdf.write(content)
+            pdf.flush()
+            uploaded = (await asyncio.to_thread(client.upload_file, pdf.name)).get("data", {})
+        if not uploaded.get("name"):
+            raise aiohttp.web.HTTPBadGateway(text="Could not store PDF")
+        result = client.update_row(table, row_id, {column: [{"name": uploaded["name"], "visible_name": name}]})
+        if "data" not in result:
+            raise aiohttp.web.HTTPBadGateway(text="Could not link PDF")
+    return aiohttp.web.json_response({"status": "OK"})
 
 
 @routes.delete("/api/complete-deletion")

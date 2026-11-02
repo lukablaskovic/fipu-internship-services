@@ -16,9 +16,8 @@ from google.oauth2.id_token import verify_oauth2_token
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "182844940133-k5k1t08dposga8083n6nek2r4gjo9a7l.apps.googleusercontent.com")
 DOMAINS = {"unipu.hr", "student.unipu.hr", "fipu.hr"}
 WORKFLOW = {"alokacija_direct_b", "register_assignments", "alokacija_studenta", "odustajanje", "update_status_zahtjeva",
-            "fetch_public_alokacije", "fetch_poslodavac_from_zadatak", "fill_application_form", "update_dnevnik"}
-SELF = {"session", "fetch_public_alokacije", "update_avatar", "add_new_student", "set_student_internship_process",
-        "store_pdf_dnevnik_prakse", "store_pdf_ispunjena_potvrda"}
+            "fetch_public_alokacije", "fetch_poslodavac_from_zadatak", "fill_application_form", "update_dnevnik", "store_diary_document"}
+SELF = {"session", "fetch_public_alokacije", "update_avatar", "add_new_student", "set_student_internship_process"}
 COORDINATOR = {"delete_student", "add_new_company", "update_company", "update_voditelj_odobrio",
                "fetch_student_preferences_detailed", "fetch_public_alokacije", "complete_deletion",
                "direct_upload_to_baserow", "store_poslodavac_logo", "list_years", "get_year", "get_document"}
