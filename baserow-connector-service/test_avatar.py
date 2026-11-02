@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import Mock, patch
-from aiohttp import web
+from aiohttp import FormData, web
 from aiohttp.test_utils import TestClient, TestServer
 from avatar import authenticated_email, register_avatar_route, validate_avatar
 
@@ -60,6 +60,53 @@ class AvatarRouteTests(unittest.IsolatedAsyncioTestCase):
         self.backend.get_row_id_by_attribute.return_value = None
         response = await self.http.patch("/api/student/avatar", json=data, headers=headers)
         self.assertEqual(response.status, 404)
+
+    async def upload(self, data=b"\x89PNG\r\n\x1a\nimage", mime="image/png", headers=None):
+        form = FormData()
+        form.add_field("file", data, filename="../../photo.png", content_type=mime)
+        return await self.http.patch("/api/student/avatar", data=form,
+                                     headers=headers if headers is not None else {"X-Local-User": "student@local.test"})
+
+    async def test_upload_and_identity(self):
+        import os
+        temporary_paths = []
+        def store(path):
+            self.assertTrue(os.path.isfile(path))
+            temporary_paths.append(path)
+            return {"data": {"url": "https://example.com/upload.png", "is_image": True}}
+        self.backend.upload_file.side_effect = store
+        response = await self.upload()
+        self.assertEqual(response.status, 200)
+        self.assertEqual(await response.json(), {"avatar": "https://example.com/upload.png"})
+        self.backend.update_row.assert_called_once_with("students", 7, {"avatar": "https://example.com/upload.png"})
+        self.backend.get_row_id_by_attribute.assert_called_with("students", "email", "student@local.test", {})
+        self.assertFalse(os.path.exists(temporary_paths[0]))
+        self.backend.upload_file.reset_mock()
+        response = await self.upload(headers={})
+        self.assertEqual(response.status, 401)
+        self.backend.get_row_id_by_attribute.return_value = None
+        response = await self.upload()
+        self.assertEqual(response.status, 404)
+        self.backend.upload_file.assert_not_called()
+
+    async def test_upload_validation(self):
+        for data, mime, status in [(b"not an image", "image/png", 400),
+                                   (b"<svg/>", "image/svg+xml", 400),
+                                   (b"\x89PNG\r\n\x1a\n", "image/jpeg", 400),
+                                   (b"x" * (2 * 1024 * 1024 + 1), "image/png", 413)]:
+            response = await self.upload(data, mime)
+            self.assertEqual(response.status, status)
+        self.backend.upload_file.assert_not_called()
+        self.backend.update_row.assert_not_called()
+
+    async def test_upload_failure_does_not_change_avatar(self):
+        self.backend.upload_file.return_value = {"error": "unavailable"}
+        response = await self.upload()
+        self.assertEqual(response.status, 502)
+        self.backend.upload_file.return_value = {"data": {"url": "https://example.com/file.png", "is_image": False}}
+        response = await self.upload()
+        self.assertEqual(response.status, 502)
+        self.backend.update_row.assert_not_called()
 
 
 if __name__ == "__main__":
