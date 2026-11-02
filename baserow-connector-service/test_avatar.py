@@ -33,7 +33,7 @@ class AvatarRouteTests(unittest.IsolatedAsyncioTestCase):
         self.backend.get_row_id_by_attribute.return_value = 7
         self.backend.update_row.return_value = {"data": {"avatar": "https://example.com/a.png"}}
         routes = web.RouteTableDef()
-        register_avatar_route(routes, self.backend, "students", {})
+        register_avatar_route(routes, self.backend, lambda coordinator: ("staff" if coordinator else "students", {}))
         with patch("access.service_token", return_value="x" * 32):
             app = web.Application(middlewares=[access_control(True)])
         app.add_routes(routes)

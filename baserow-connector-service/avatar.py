@@ -61,10 +61,11 @@ async def upload_avatar(request, client, loop):
     return url
 
 
-def register_avatar_route(routes, client, table_id, mapping):
+def register_avatar_route(routes, client, profile_table):
     @routes.patch("/api/student/avatar")
     async def update_avatar(request):
         loop = asyncio.get_running_loop()
+        table_id, mapping = profile_table(request["coordinator"])
         email = request["email"]
         multipart = request.content_type == "multipart/form-data"
         if not multipart:

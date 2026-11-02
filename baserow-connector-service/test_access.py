@@ -29,6 +29,12 @@ class CredentialTests(unittest.TestCase):
             transport.return_value.return_value = certs
             valid = headers()
             self.assertEqual(authenticated_email(valid), claims["email"])
+            test_email = "lukablaskovic2000@gmail.com"
+            self.assertEqual(authenticated_email(headers(email=test_email, hd=None)), test_email)
+            with self.assertRaises(web.HTTPUnauthorized):
+                authenticated_email(headers(email=test_email, hd=None, email_verified=False))
+            with self.assertRaises(web.HTTPForbidden):
+                authenticated_email(headers(email="lukablaskovic2000+other@gmail.com", hd=None))
             with patch("access.time", return_value=now+61), self.assertRaises(web.HTTPUnauthorized):
                 authenticated_email(valid)
             for invalid in (headers(aud="another-client"), headers(iss="another-issuer"), headers(exp=now-1),

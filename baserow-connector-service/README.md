@@ -14,10 +14,15 @@ BASEROW_TOKEN = "xxxxxxxxxxxxx"
 BASE_URL = "xxxxxxxxxxxxx"
 ```
 
+The 26–27 database stores student profiles in `Student` and coordinator profiles in
+`Djelatnik`. The verified coordinator allowlist selects the table on login,
+registration and avatar updates. A staff row alone grants no privileges. The
+dashboard reads either profile through the existing `student` session property.
+
 ### Profile avatar
 
 `PATCH /api/student/avatar` accepts `{ "avatar": "https://…" }`. It updates only
-that field on the existing student record belonging to the verified Google ID
+that field on the existing profile belonging to the verified Google ID
 token in `Authorization: Bearer …`. Install the updated requirements before
 starting the service. `GOOGLE_CLIENT_ID` defaults to the dashboard's client ID;
 set it if deploying a different Google client. Expired tokens require a fresh
@@ -26,7 +31,7 @@ Google login. Image URLs are not fetched by this service.
 The same endpoint accepts multipart form data with one `file` (JPG, PNG or
 WebP, at most 2 MiB). Authentication and record lookup happen before upload.
 The service checks file signatures and MIME types, uses a temporary file, then
-stores Baserow's image URL on the same student record. Baserow must recognize
+stores Baserow's image URL on the same profile. Baserow must recognize
 it as an image. Failed record updates leave the previous avatar unchanged;
 an already uploaded file may remain in Baserow if that update fails.
 Deploy the connector together with the dashboard to enable file uploads.

@@ -36,13 +36,14 @@ TABLES_MAP_DEV = {
 }
 
 TABLES_MAP = {
-    "Student": "488",
-    "Poslodavac": "489",
-    "Zadaci_za_odabir": "490",
-    "Student_preferencije": "491",
-    "Alokacija": "492",
-    "Prijavnica": "493",
-    "Dnevnik_prakse": "494",
+    "Student": "845",
+    "Poslodavac": "846",
+    "Zadaci_za_odabir": "847",
+    "Student_preferencije": "848",
+    "Alokacija": "849",
+    "Prijavnica": "850",
+    "Dnevnik_prakse": "851",
+    "Djelatnik": "852"
 }
 
 
@@ -55,18 +56,29 @@ from academic_years import register_academic_year_routes
 register_academic_year_routes(routes, os.getenv("ACADEMIC_ARCHIVE_DIR"), bool(br.LOCAL_CONFIG) and os.getenv("ALLOW_LOCAL_DEMO") == "true")
 
 from avatar import register_avatar_route
-register_avatar_route(routes, client, TABLES_MAP["Student"], br.Student_Mappings)
+def profile_table(coordinator):
+    if coordinator:
+        return TABLES_MAP["Djelatnik"], br.Djelatnik_Mappings
+    return TABLES_MAP["Student"], br.Student_Mappings
+
+
+register_avatar_route(routes, client, profile_table)
+
+
+def profile_row(email, coordinator=False):
+    table_id, mapping = profile_table(coordinator)
+    rows = client.get_table_rows(table_id, [
+        f"filter__{mapping['email']}__equal={quote(email, safe='')}", "size=2"])
+    if "data" not in rows:
+        raise aiohttp.web.HTTPBadGateway(text="Cannot verify profile")
+    found = rows["data"]["results"]
+    if len(found) > 1 or (found and found[0].get("email", "").lower() != email):
+        raise aiohttp.web.HTTPConflict(text="Ambiguous profile identity")
+    return found[0] if found else None
 
 
 def student_row(email):
-    rows = client.get_table_rows(TABLES_MAP["Student"], [
-        f"filter__{br.Student_Mappings['email']}__equal={quote(email, safe='')}", "size=2"])
-    if "data" not in rows:
-        raise aiohttp.web.HTTPBadGateway(text="Cannot verify student")
-    found = rows["data"]["results"]
-    if len(found) > 1 or (found and found[0].get("email", "").lower() != email):
-        raise aiohttp.web.HTTPConflict(text="Ambiguous student identity")
-    student = found[0] if found else None
+    student = profile_row(email)
     if student and student.get("process_instance_id"):
         # A legacy link is evidence of ownership only when exactly one student has it.
         iid = quote(student["process_instance_id"], safe="")
@@ -79,9 +91,15 @@ def student_row(email):
     return student
 
 
+@routes.get("/api/administratori")
+async def list_administrators(request):
+    return aiohttp.web.json_response(request["administrator_emails"])
+
+
 @routes.get("/api/session")
 async def session(request):
-    student = student_row(request["email"])
+    # The deployed dashboard reads the signed-in profile from the legacy student key.
+    student = profile_row(request["email"], True) if request["coordinator"] else student_row(request["email"])
     return aiohttp.web.json_response({"email": request["email"], "coordinator": request["coordinator"],
                                       "student": student})
 
@@ -105,6 +123,17 @@ async def add_new_student(req):
     email = req["email"]
     if data.get("email", email) != email:
         raise aiohttp.web.HTTPForbidden()
+    if req["coordinator"]:
+        staff = profile_row(email, True)
+        if not staff:
+            result = client.create_row(TABLES_MAP["Djelatnik"], {
+                "email": email, "ime": data.get("ime"), "prezime": data.get("prezime"), "avatar": data.get("avatar"),
+            })
+            staff = (result or {}).get("data") or profile_row(email, True)
+            if not staff:
+                raise aiohttp.web.HTTPBadGateway(text="Cannot save staff profile")
+        return aiohttp.web.json_response({"data": staff})
+
     jmbag = "0000000000"
 
     existing_email = client.get_row_id_by_attribute(
