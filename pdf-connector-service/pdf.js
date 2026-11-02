@@ -22,12 +22,6 @@ function replacePlaceholders(template, data) {
   return template;
 }
 
-function generateHash(oib, mobile) {
-  const shasum = crypto.createHash("sha1");
-  shasum.update(oib + mobile);
-  return shasum.digest("hex");
-}
-
 async function generatePDFContent(page, jsonData) {
   // Use long template if task description exceeds 700 characters
   const taskDescription = jsonData.detaljan_opis_zadatka || "";
@@ -82,9 +76,7 @@ router.post("/potvrda", async (req, res) => {
     const pdfBuffer = await page.pdf({ format: "A4" });
     await browser.close();
 
-    const fileName =
-      generateHash(jsonData.student_OIB, jsonData.student_broj_mobitela) +
-      ".pdf";
+    const fileName = crypto.createHash("sha256").update(pdfBuffer).digest("hex") + ".pdf";
 
     const currentModulePath = fileURLToPath(import.meta.url);
     console.log("currentModulePath", currentModulePath);
