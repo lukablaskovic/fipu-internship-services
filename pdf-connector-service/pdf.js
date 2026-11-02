@@ -5,12 +5,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import crypto from "crypto";
 import "dotenv/config";
-import { Console } from "console";
 
 const router = Router();
-
-// Constants
-const PDF_MIME_TYPE = "data:application/pdf;base64";
 
 // Utility functions
 function replacePlaceholders(template, data) {
@@ -51,51 +47,69 @@ async function applyStyles(page) {
   });
 }
 
-router.post("/potvrda", async (req, res) => {
+async function renderCertificate(jsonData) {
+  const browser = await chromium.launch({
+    args: [
+      "--no-sandbox",
+      "--headless",
+      "--hide-scrollbars",
+      "--printBackground=true",
+      "--disable-dev-shm-usage",
+      "--font-render-hinting=medium",
+    ],
+  });
+
   try {
-    const jsonData = req.body;
-
-    const browser = await chromium.launch({
-      args: [
-        "--no-sandbox",
-        "--headless",
-        "--hide-scrollbars",
-        "--printBackground=true",
-        "--disable-dev-shm-usage",
-        "--font-render-hinting=medium",
-      ],
-    });
-
     const page = await browser.newPage();
     await generatePDFContent(page, jsonData);
     await applyStyles(page);
-
-    await page.evaluate(() => matchMedia("screen").matches);
     await page.emulateMedia({ media: "screen" });
-
-    const pdfBuffer = await page.pdf({ format: "A4" });
+    return await page.pdf({ format: "A4" });
+  } finally {
     await browser.close();
+  }
+}
 
-    const fileName = crypto.createHash("sha256").update(pdfBuffer).digest("hex") + ".pdf";
+const directory = path.join(path.dirname(fileURLToPath(import.meta.url)), "potvrde");
+const digest = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
 
-    const currentModulePath = fileURLToPath(import.meta.url);
-    console.log("currentModulePath", currentModulePath);
-    const currentModuleDir = path.dirname(currentModulePath);
-    console.log("currentModuleDir", currentModuleDir);
-    const filePath = path.join(currentModuleDir, "potvrde", fileName);
-    console.log("filePath", filePath);
+async function certificateName(data, key) {
+  // Publish complete files atomically. A hidden hard link keeps the original bytes across retries.
+  const receipt = key && path.join(directory, "." + digest(JSON.stringify([key, data])));
+  if (receipt) {
+    try {
+      const name = digest(await fs.readFile(receipt)) + ".pdf";
+      await publishLink(receipt, path.join(directory, name));
+      return name;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  const bytes = await renderCertificate(data);
+  const temp = path.join(directory, "." + crypto.randomUUID());
+  await fs.writeFile(temp, bytes, { flag: "wx" });
+  try {
+    if (receipt) await publishLink(temp, receipt);
+    const name = digest(receipt ? await fs.readFile(receipt) : bytes) + ".pdf";
+    await publishLink(receipt || temp, path.join(directory, name));
+    return name;
+  } finally {
+    await fs.unlink(temp);
+  }
+}
 
-    await fs.writeFile(filePath, pdfBuffer);
+async function publishLink(source, target) {
+  try {
+    await fs.link(source, target);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+  }
+}
 
-    //For LOCAL : pdf_attachment_url: `${process.env.SERVICE_URL}:${process.env.PORT}/api/potvrda/${fileName}`,
-    console.log(
-      "pdf_attachment_url",
-      `${process.env.SERVICE_URL}/api/potvrda/${fileName}`
-    );
-
-    res.json({
-      pdf_attachment_url: `${process.env.SERVICE_URL}/api/potvrda/${fileName}`,
-    });
+router.post("/potvrda", async (req, res) => {
+  try {
+    const name = await certificateName(req.body, req.get("Idempotency-Key"));
+    res.json({ pdf_attachment_url: `${process.env.SERVICE_URL}/api/potvrda/${name}` });
   } catch (error) {
     console.error(error);
     res.status(500).send("Internal Server Error");

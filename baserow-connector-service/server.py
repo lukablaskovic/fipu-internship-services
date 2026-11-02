@@ -484,70 +484,51 @@ async def update_voditelj_odobrio(req):
         return response
 
 
+def create_workflow_row(request, table, key_field, data):
+    key = request.headers.get("Idempotency-Key")
+    if key is None:
+        data[key_field] = str(uuid.uuid4())
+    else:
+        try:
+            operation = uuid.UUID(key)
+        except ValueError:
+            raise aiohttp.web.HTTPBadRequest(text="Invalid operation key")
+        row_key = str(uuid.uuid5(operation, table))
+        field = getattr(br, table + "_Mappings")[key_field]
+        result = client.get_table_rows(TABLES_MAP[table], [f"filter__{field}__equal={row_key}", "size=2"])
+        if not result or "data" not in result:
+            raise aiohttp.web.HTTPBadGateway(text="Could not verify previous write")
+        rows = result["data"]["results"]
+        if len(rows) > 1:
+            raise aiohttp.web.HTTPConflict(text="Ambiguous previous write")
+        data[key_field] = row_key
+        if rows:
+            return rows[0]
+    created = client.create_row(TABLES_MAP[table], data)
+    if created and "error" in created and created["status_code"] == 400:
+        raise aiohttp.web.HTTPBadRequest(text="Baserow rejected row data")
+    if not created or "data" not in created:
+        raise aiohttp.web.HTTPBadGateway(text="Could not confirm row creation")
+    return created["data"]
+
+
 @routes.post("/api/student_preferencije")
 async def register_assignments(req):
     logger.info("Route /api/student_preferencije accessed")
 
     data = await req.json()
-    try:
-        preferencije_data = {
-            "id_preferencije": str(uuid.uuid4()),
-            "JMBAG": data.get("JMBAG"),
-            "Student": data["Student"],
-            "Prvi_odabir": data.get("Prvi_odabir"),
-            "Drugi_odabir": data.get("Drugi_odabir"),
-            "Treci_odabir": data.get("Treci_odabir"),
-            "napomena": data.get("napomena"),
-        }
-        preferencije_response = client.create_row(
-            table_id=TABLES_MAP["Student_preferencije"], data=preferencije_data
-        )
-        response_data = {}
-
-        if "data" in preferencije_response:
-            student_id = preferencije_response["data"]["id"]
-            Student_preferencije = preferencije_response["data"]["id_preferencije"]
-            response_data["student_id"] = student_id
-            response_data["id_preferencije"] = Student_preferencije
-
-            current_date = dt.datetime.now().isoformat() + "Z"
-
-            alokacija_data = {
-                "id_alokacija": str(uuid.uuid4()),
-                "JMBAG": data.get("JMBAG"),
-                "Student_preferencije": [Student_preferencije],
-                "Student": data["Student"],
-                "datum_prijave": current_date,
-                "process_instance_id": data["id_instance"] or "",
-                "frontend_url": data["_frontend_url"],
-            }
-
-            # Add to Alokacija table
-            alokacija_response = client.create_row(
-                table_id=TABLES_MAP["Alokacija"], data=alokacija_data
-            )
-            if "data" in alokacija_response:
-                response_data["id_alokacija"] = alokacija_response["data"][
-                    "id_alokacija"
-                ]
-            elif "error" in alokacija_response:
-                return aiohttp.web.Response(
-                    text=json.dumps(alokacija_response["error"]),
-                    status=alokacija_response["status_code"],
-                    content_type="application/json",
-                )
-
-        logger.info("Sending response: %s", response_data)
-        return aiohttp.web.Response(
-            text=json.dumps(response_data), content_type="application/json"
-        )
-    except Exception as e:
-        logger.error("An error occurred: %s", str(e))
-        return aiohttp.web.Response(
-            text="Internal Server Error",
-            status=500,
-            content_type="text/plain",
-        )
+    preference = create_workflow_row(req, "Student_preferencije", "id_preferencije", {
+        "JMBAG": data.get("JMBAG"), "Student": data["Student"],
+        "Prvi_odabir": data.get("Prvi_odabir"), "Drugi_odabir": data.get("Drugi_odabir"),
+        "Treci_odabir": data.get("Treci_odabir"), "napomena": data.get("napomena"),
+    })
+    allocation = create_workflow_row(req, "Alokacija", "id_alokacija", {
+        "JMBAG": data.get("JMBAG"), "Student_preferencije": [preference["id_preferencije"]],
+        "Student": data["Student"], "datum_prijave": dt.datetime.now().isoformat() + "Z",
+        "process_instance_id": data["id_instance"] or "", "frontend_url": data["_frontend_url"],
+    })
+    return aiohttp.web.json_response({"student_id": preference["id"], "id_preferencije": preference["id_preferencije"],
+                                      "id_alokacija": allocation["id_alokacija"]})
 
 
 @routes.get("/api/student_preferencije/detailed/{id_preferencije}")
@@ -990,20 +971,11 @@ async def fill_application_form(request):
         "kontakt_potvrda": data["kontakt_potvrda"],
         "Poslodavac": [data["Poslodavac"]],
         "mjesto_izvrsavanja": data["mjesto_izvrsavanja"],
-        "id_prijavnica": str(uuid.uuid4()),
         "Alokacija": [data["id_alokacija"]],
         "process_instance_id": data["id_instance"],
     }
 
-    prijavnica_response = client.create_row(TABLES_MAP["Prijavnica"], prijavnica_data)
-
-    if "error" in prijavnica_response:
-        logger.error("Error creating prijavnica: %s", prijavnica_response["error"])
-        return aiohttp.web.Response(
-            text=json.dumps(prijavnica_response["error"]),
-            status=prijavnica_response["status_code"],
-            content_type="application/json",
-        )
+    application = create_workflow_row(request, "Prijavnica", "id_prijavnica", prijavnica_data)
 
     id_alokacija = data["id_alokacija"]
 
@@ -1034,36 +1006,15 @@ async def fill_application_form(request):
         )
 
     dnevnik_data = {
-        "id_dnevnik_prakse": str(uuid.uuid4()),
         "Alokacija": [data["id_alokacija"]],
         "Student": [data["Student"][0]],
-        "id_prijavnica": [prijavnica_data["id_prijavnica"]],
+        "id_prijavnica": [application["id_prijavnica"]],
         "process_instance_id": data["id_instance"],
     }
 
-    dnevnik_response = client.create_row(TABLES_MAP["Dnevnik_prakse"], dnevnik_data)
-
-    if "error" in dnevnik_response:
-        logger.error("Error creating dnevnik prakse: %s", dnevnik_response["error"])
-        return aiohttp.web.Response(
-            text=json.dumps(dnevnik_response["error"]),
-            status=dnevnik_response["status_code"],
-            content_type="application/json",
-        )
-
-    logger.info(
-        "Successfully filled application form for student with JMBAG: %s",
-        data["Student"][0],
-    )
-    return aiohttp.web.Response(
-        text=json.dumps(
-            {
-                "id_prijavnica": prijavnica_data["id_prijavnica"],
-                "id_dnevnik_prakse": dnevnik_data["id_dnevnik_prakse"],
-            }
-        ),
-        content_type="application/json",
-    )
+    diary = create_workflow_row(request, "Dnevnik_prakse", "id_dnevnik_prakse", dnevnik_data)
+    return aiohttp.web.json_response({"id_prijavnica": application["id_prijavnica"],
+                                      "id_dnevnik_prakse": diary["id_dnevnik_prakse"]})
 
 
 @routes.post("/api/dnevnik")
