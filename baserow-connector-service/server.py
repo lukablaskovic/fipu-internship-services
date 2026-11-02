@@ -133,6 +133,14 @@ async def set_student_internship_process(req):
             status=404,
         )
 
+    if "previous_instance_id" in data:
+        student = client.get_row(TABLES_MAP["Student"], student_id)
+        if "data" not in student:
+            raise aiohttp.web.HTTPBadGateway(text="Cannot verify the current internship")
+        current_id = student["data"].get("process_instance_id") or None
+        if current_id not in (data["previous_instance_id"], process_instance_id):
+            raise aiohttp.web.HTTPConflict(text="Student internship has changed")
+
     res = client.update_row(
         TABLES_MAP["Student"],
         student_id,
@@ -648,6 +656,33 @@ async def alokacija_direct_b(request):
             status=500,
             content_type="text/plain",
         )
+
+
+@routes.post("/api/odustajanje")
+async def odustajanje(request):
+    try:
+        data = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        raise aiohttp.web.HTTPBadRequest(text="Withdrawal requires JSON")
+    instance_id = data.get("id_instance") if isinstance(data, dict) else None
+    try:
+        instance_id = str(uuid.UUID(instance_id))
+    except (ValueError, TypeError, AttributeError):
+        raise aiohttp.web.HTTPBadRequest(text="id_instance must be a UUID")
+    table_id = TABLES_MAP["Alokacija"]
+    rows = client.get_table_rows(table_id, [
+        f"filter__{br.Alokacija_Mappings['process_instance_id']}__equal={instance_id}",
+        "size=200",
+    ])
+    if "error" in rows:
+        raise aiohttp.web.HTTPBadGateway(text="Could not read allocations")
+    if rows["data"].get("next"):
+        raise aiohttp.web.HTTPConflict(text="Unexpected number of allocations")
+    for row in rows["data"]["results"]:
+        result = client.update_row(table_id, row["id"], {"status_zahtjeva": "student_odustao"})
+        if "error" in result:
+            raise aiohttp.web.HTTPBadGateway(text="Could not update allocation")
+    return aiohttp.web.json_response({"status": "OK"})
 
 
 @routes.patch("/api/status_zahtjeva")
