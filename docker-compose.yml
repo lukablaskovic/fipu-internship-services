@@ -4,6 +4,10 @@ services:
   baserow-connector:
     build:
       context: ./baserow-connector-service
+    environment:
+      WORKFLOW_SERVICE_TOKEN: ${WORKFLOW_SERVICE_TOKEN:?set shared workflow credential}
+      COORDINATOR_EMAILS: ${COORDINATOR_EMAILS:?set coordinator email allowlist}
+      FRONTEND_URL: ${FRONTEND_URL:?set frontend origin}
     ports:
       - "8080:8080"
     container_name: baserow-connector-container

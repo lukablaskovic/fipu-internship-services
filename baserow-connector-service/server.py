@@ -1,4 +1,5 @@
 import aiohttp
+import re
 import asyncio
 import uuid
 import os
@@ -12,11 +13,13 @@ from datetime import datetime
 import tempfile
 from dotenv import load_dotenv
 import logging
+from urllib.parse import quote
+from access import access_control, verify_binding
 
 load_dotenv()
 routes = aiohttp.web.RouteTableDef()
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = None
@@ -48,19 +51,60 @@ if br.LOCAL_CONFIG:
 client = BaserowClient()
 
 from academic_years import register_academic_year_routes
-register_academic_year_routes(routes, os.getenv("ACADEMIC_ARCHIVE_DIR"), bool(br.LOCAL_CONFIG))
+register_academic_year_routes(routes, os.getenv("ACADEMIC_ARCHIVE_DIR"), bool(br.LOCAL_CONFIG) and os.getenv("ALLOW_LOCAL_DEMO") == "true")
 
 from avatar import register_avatar_route
-register_avatar_route(routes, client, TABLES_MAP["Student"], br.Student_Mappings, bool(br.LOCAL_CONFIG))
+register_avatar_route(routes, client, TABLES_MAP["Student"], br.Student_Mappings)
+
+
+def student_row(email):
+    rows = client.get_table_rows(TABLES_MAP["Student"], [
+        f"filter__{br.Student_Mappings['email']}__equal={quote(email, safe='')}", "size=2"])
+    if "data" not in rows:
+        raise aiohttp.web.HTTPBadGateway(text="Cannot verify student")
+    found = rows["data"]["results"]
+    if len(found) > 1 or (found and found[0].get("email", "").lower() != email):
+        raise aiohttp.web.HTTPConflict(text="Ambiguous student identity")
+    student = found[0] if found else None
+    if student and student.get("process_instance_id"):
+        # A legacy link is evidence of ownership only when exactly one student has it.
+        iid = quote(student["process_instance_id"], safe="")
+        matches = client.get_table_rows(TABLES_MAP["Student"], [
+            f"filter__{br.Student_Mappings['process_instance_id']}__equal={iid}", "size=2"])
+        if "data" not in matches:
+            raise aiohttp.web.HTTPBadGateway()
+        if [r["id"] for r in matches["data"]["results"]] != [student["id"]]:
+            raise aiohttp.web.HTTPConflict(text="Ambiguous internship owner")
+    return student
+
+
+@routes.get("/api/session")
+async def session(request):
+    student = student_row(request["email"])
+    return aiohttp.web.json_response({"email": request["email"], "coordinator": request["coordinator"],
+                                      "student": student})
+
+
+def owned_row(request, table, field, value, mapping):
+    student = student_row(request["email"])
+    if not student:
+        raise aiohttp.web.HTTPNotFound()
+    row_id = client.get_row_id_by_attribute(TABLES_MAP[table], field, value, mapping)
+    row = client.get_row(TABLES_MAP[table], row_id).get("data") if row_id else None
+    if not row or [r["id"] for r in row.get("Student", [])] != [student["id"]] or not (
+            row.get("process_instance_id") and row["process_instance_id"] == student.get("process_instance_id")):
+        raise aiohttp.web.HTTPNotFound()
+    return row
 
 
 @routes.post("/api/student")
 async def add_new_student(req):
     data = await req.json()
-    logger.info("Received data: %s", data)
 
-    email = data.get("email")
-    jmbag = data.get("JMBAG")
+    email = req["email"]
+    if data.get("email", email) != email:
+        raise aiohttp.web.HTTPForbidden()
+    jmbag = "0000000000"
 
     existing_email = client.get_row_id_by_attribute(
         TABLES_MAP["Student"], "email", email, br.Student_Mappings
@@ -107,39 +151,30 @@ async def add_new_student(req):
 @routes.patch("/api/student/process")
 async def set_student_internship_process(req):
     data = await req.json()
-    logger.info("Received data: %s", data)
 
-    email = data.get("email")
+    email = req["email"]
+    if data.get("email", email) != email:
+        raise aiohttp.web.HTTPForbidden()
     process_instance_id = data.get("process_instance_id")
     model_prakse = data.get("Model_prakse")
     JMBAG = data.get("JMBAG")
     godina_studija = data.get("godina_studija")
 
-    student_id = client.get_row_id_by_attribute(
-        TABLES_MAP["Student"], "email", email, br.Student_Mappings
-    )
-
-    if not student_id:
-        logger.warning("Student with email %s not found", email)
-        return aiohttp.web.Response(
-            text=json.dumps(
-                {
-                    "error": "Student with entered email not found",
-                    "status_code": 404,
-                    "ERROR_CODE": "BCS_STUDENT_NOT_FOUND",
-                }
-            ),
-            content_type="application/json",
-            status=404,
-        )
-
-    if "previous_instance_id" in data:
-        student = client.get_row(TABLES_MAP["Student"], student_id)
-        if "data" not in student:
-            raise aiohttp.web.HTTPBadGateway(text="Cannot verify the current internship")
-        current_id = student["data"].get("process_instance_id") or None
-        if current_id not in (data["previous_instance_id"], process_instance_id):
-            raise aiohttp.web.HTTPConflict(text="Student internship has changed")
+    student = student_row(email)
+    if not student:
+        raise aiohttp.web.HTTPNotFound(text="Student not found")
+    student_id = student["id"]
+    if "previous_instance_id" not in data:
+        raise aiohttp.web.HTTPBadRequest()
+    verify_binding(data, email)
+    if not isinstance(JMBAG, str) or not JMBAG.isascii() or not JMBAG.isdigit() or len(JMBAG) != 10:
+        raise aiohttp.web.HTTPBadRequest(text="Invalid JMBAG")
+    duplicate = client.get_row_id_by_attribute(TABLES_MAP["Student"], "JMBAG", JMBAG, br.Student_Mappings)
+    if duplicate is not None and duplicate != student_id:
+        raise aiohttp.web.HTTPConflict(text="JMBAG already assigned")
+    current_id = student.get("process_instance_id") or None
+    if current_id not in (data["previous_instance_id"], process_instance_id):
+        raise aiohttp.web.HTTPConflict(text="Student internship has changed")
 
     res = client.update_row(
         TABLES_MAP["Student"],
@@ -195,15 +230,28 @@ async def delete_student(req):
 async def add_new_assignment(req):
     try:
         data = await req.json()
-        logging.info("Received request data: %s", data)
-
-        company_name = data.get("Poslodavac")[0]
-        existing_company_id = client.get_row_id_by_attribute(
-            TABLES_MAP["Poslodavac"], "naziv", company_name, br.Poslodavac_Mappings
-        )
-
-        if not existing_company_id:
+        names = data.get("Poslodavac") if isinstance(data, dict) else None
+        if not isinstance(names, list) or len(names) != 1 or not isinstance(names[0], str) or not names[0].strip():
+            return aiohttp.web.json_response({"error": "Naziv organizacije je obavezan."}, status=400)
+        company_name = names[0].strip()
+        companies = client.get_table_rows(TABLES_MAP["Poslodavac"], [
+            f"filter__{br.Poslodavac_Mappings['naziv']}__equal={quote(company_name, safe='')}", "size=1"
+        ])
+        if "data" not in companies:
+            return aiohttp.web.json_response({"error": "Provjera organizacije nije uspjela."}, status=502)
+        if companies["data"]["results"]:
+            existing_company_id = companies["data"]["results"][0]["id"]
+        else:
+            details = data.get("new_company")
             new_company_data = {"naziv": company_name}
+            for field in ("web", "direktor", "maticni_broj", "OIB", "adresa"):
+                value = details.get(field) if isinstance(details, dict) else None
+                if not isinstance(value, str) or not value.strip():
+                    return aiohttp.web.json_response({"error": f"Obavezno polje: {field}"}, status=400)
+                new_company_data[field] = value.strip()
+            for field, pattern in (("OIB", r"[0-9]{11}"), ("maticni_broj", r"[0-9]+"), ("web", r"https?://[^\s/\\?#]+[^\s\\]*")):
+                if not re.fullmatch(pattern, new_company_data[field], re.IGNORECASE):
+                    return aiohttp.web.json_response({"error": f"Neispravan podatak: {field}"}, status=400)
             company_creation_response = client.create_row(
                 table_id=TABLES_MAP["Poslodavac"], data=new_company_data
             )
@@ -211,17 +259,14 @@ async def add_new_assignment(req):
                 existing_company_id = company_creation_response["data"]["id"]
                 logging.info("Created new company with ID: %s", existing_company_id)
             else:
-                logging.error(
-                    "Failed to create new company. Response: %s",
-                    company_creation_response,
-                )
-                return aiohttp.web.Response(
-                    text=json.dumps(company_creation_response),
-                    content_type="application/json",
-                )
+                return aiohttp.web.json_response({"error": "Spremanje organizacije nije uspjelo."}, status=502)
+        selection = data.get("selekcija")
+        if isinstance(selection, bool):
+            # Local text fields and Baserow boolean fields both accept these wire values.
+            selection = "true" if selection else "false"
         new_row_data = dict(
             {
-                "Poslodavac": data.get("Poslodavac"),
+                "Poslodavac": [existing_company_id],
                 "voditelj_odobrio": "u razradi",
                 "poslodavac_email": data.get("poslodavac_email"),
                 "broj_studenata": data.get("broj_studenata"),
@@ -236,7 +281,7 @@ async def add_new_assignment(req):
                 ),
                 "angazman_fipu": data.get("angazman_fipu"),
                 "napomena": data.get("napomena"),
-                "selekcija": data.get("selekcija"),
+                "selekcija": selection,
                 "proces_selekcije": data.get("proces_selekcije"),
             },
         )
@@ -244,34 +289,20 @@ async def add_new_assignment(req):
         creation_response = client.create_row(
             TABLES_MAP["Zadaci_za_odabir"], new_row_data
         )
-        logging.info("Created new row with response: %s", creation_response)
 
         if "data" in creation_response:
             new_row_id = creation_response["data"]["id"]
 
-            Poslodavac_value = (
-                data.get("Poslodavac")[0] if data.get("Poslodavac") else ""
-            )
-
-            formatted_id = f"Zadatak {new_row_id} - {Poslodavac_value}"
+            formatted_id = f"Zadatak {new_row_id} - {company_name}"
             update_response = client.update_row(
                 TABLES_MAP["Zadaci_za_odabir"], new_row_id, {"id_zadatak": formatted_id}
             )
 
-            return aiohttp.web.Response(
-                text=json.dumps(update_response), content_type="application/json"
-            )
-
-        else:
-            return aiohttp.web.Response(
-                text=json.dumps(creation_response), content_type="application/json"
-            )
-    except Exception as e:
-        logging.error("An error occurred: %s", e)
-        return aiohttp.web.Response(
-            text=json.dumps({"error": str(e)}),
-            content_type="application/json",
-        )
+            return aiohttp.web.json_response(update_response, status=200 if "data" in update_response else 502)
+        return aiohttp.web.json_response({"error": "Spremanje zadatka nije uspjelo."}, status=502)
+    except Exception:
+        logger.exception("Assignment submission failed")
+        return aiohttp.web.json_response({"error": "Prijava zadatka nije uspjela."}, status=500)
 
 
 @routes.post("/api/poslodavac")
@@ -428,12 +459,11 @@ async def register_assignments(req):
     logger.info("Route /api/student_preferencije accessed")
 
     data = await req.json()
-    logger.info("Received data: %s", data)
     try:
         preferencije_data = {
             "id_preferencije": str(uuid.uuid4()),
             "JMBAG": data.get("JMBAG"),
-            "Student": [data.get("JMBAG")],
+            "Student": data["Student"],
             "Prvi_odabir": data.get("Prvi_odabir"),
             "Drugi_odabir": data.get("Drugi_odabir"),
             "Treci_odabir": data.get("Treci_odabir"),
@@ -456,7 +486,7 @@ async def register_assignments(req):
                 "id_alokacija": str(uuid.uuid4()),
                 "JMBAG": data.get("JMBAG"),
                 "Student_preferencije": [Student_preferencije],
-                "Student": [data.get("JMBAG")],
+                "Student": data["Student"],
                 "datum_prijave": current_date,
                 "process_instance_id": data["id_instance"] or "",
                 "frontend_url": data["_frontend_url"],
@@ -615,47 +645,26 @@ async def alokacija_direct_b(request):
     logger.info("Route /api/alokacija accessed")
 
     data = await request.json()
-    logger.info("Received data: %s", data)
-    response_data = {}
-    try:
-        current_date = dt.datetime.now().isoformat() + "Z"
+    iid = str(uuid.UUID(data["id_instance"]))
+    table = TABLES_MAP["Alokacija"]
+    previous = client.get_table_rows(table, [
+        f"filter__{br.Alokacija_Mappings['process_instance_id']}__equal={iid}", "size=2"])
+    if "data" not in previous:
+        raise aiohttp.web.HTTPBadGateway()
+    rows = previous["data"]["results"]
+    if rows:
+        if len(rows) != 1 or [r["id"] for r in rows[0]["Student"]] != data["Student"]:
+            raise aiohttp.web.HTTPConflict(text="Ambiguous allocation")
+        return aiohttp.web.json_response({"id_alokacija": rows[0]["id_alokacija"]})
 
-        alokacija_data = {
-            "id_alokacija": str(uuid.uuid4()),
-            "JMBAG": data.get("JMBAG"),
-            "Student_preferencije": [],  # empty since it is model B
-            "Student": [data.get("JMBAG")],
-            "datum_prijave": current_date,
-            "process_instance_id": data["id_instance"] or "",
-            "frontend_url": data["_frontend_url"],
-            "Napomena": data.get("Napomena"),
-        }
-
-        # Add to Alokacija table
-        alokacija_response = client.create_row(
-            table_id=TABLES_MAP["Alokacija"], data=alokacija_data
-        )
-        if "data" in alokacija_response:
-            response_data["id_alokacija"] = alokacija_response["data"]["id_alokacija"]
-        elif "error" in alokacija_response:
-            return aiohttp.web.Response(
-                text=json.dumps(alokacija_response["error"]),
-                status=alokacija_response["status_code"],
-                content_type="application/json",
-            )
-
-        logger.info("Sending response: %s", response_data)
-        return aiohttp.web.Response(
-            text=json.dumps(response_data), content_type="application/json"
-        )
-
-    except Exception as e:
-        logger.error("An error occurred: %s", str(e))
-        return aiohttp.web.Response(
-            text="Internal Server Error",
-            status=500,
-            content_type="text/plain",
-        )
+    result = client.create_row(table, {
+        "id_alokacija": str(uuid.uuid4()), "JMBAG": data["JMBAG"], "Student": data["Student"],
+        "Student_preferencije": [], "datum_prijave": dt.datetime.now().isoformat() + "Z",
+        "process_instance_id": iid, "frontend_url": os.environ["FRONTEND_URL"], "Napomena": data.get("Napomena"),
+    })
+    if not result or "data" not in result:
+        raise aiohttp.web.HTTPBadGateway(text="Could not create allocation")
+    return aiohttp.web.json_response({"id_alokacija": result["data"]["id_alokacija"]})
 
 
 @routes.post("/api/odustajanje")
@@ -799,6 +808,21 @@ async def fetch_public_alokacije(request):
             "Prijavnica": row.get("Prijavnica", ""),
             "process_instance_id": row.get("process_instance_id", ""),
         }
+
+    if not request["coordinator"] and not request.get("workflow"):
+        if id_alokacija is not None:
+            row = owned_row(request, "Alokacija", "id_alokacija", id_alokacija, br.Alokacija_Mappings)
+            return aiohttp.web.json_response(format_output(row))
+        student = student_row(request["email"])
+        if not student or not student.get("process_instance_id"):
+            return aiohttp.web.json_response([])
+        rows = client.get_table_rows(table_id, [
+            f"filter__{br.Alokacija_Mappings['process_instance_id']}__equal={quote(student['process_instance_id'], safe='')}"])
+        if "data" not in rows:
+            raise aiohttp.web.HTTPBadGateway()
+        return aiohttp.web.json_response([format_output(row) for row in rows["data"]["results"]
+            if row.get("process_instance_id") == student["process_instance_id"] and
+            [r["id"] for r in row.get("Student", [])] == [student["id"]]])
 
     if id_alokacija is not None:
         logger.debug("id_alokacija: %s", id_alokacija)
@@ -1114,14 +1138,42 @@ async def fetch_table_rows(request):
             status=400,
             content_type="application/json",
         )
+    if table_name == "Dnevnik_prakse" and not request["coordinator"]:
+        value = request.query.get("search")
+        if not value or set(request.query) != {"search"}:
+            raise aiohttp.web.HTTPForbidden()
+        row = owned_row(request, table_name, "id_dnevnik_prakse", value, br.Dnevnik_prakse_Mappings)
+        return aiohttp.web.json_response({"data": {"count": 1, "results": [row]}})
     table_id = TABLES_MAP[table_name]
 
     search = request.rel_url.query.get("search")
     if search:
-        queryParams.append(f"search={search}")
+        term = quote(search, safe="")
+        if not request["coordinator"] and table_name in {"Poslodavac", "Zadaci_za_odabir"}:
+            field = br.Poslodavac_Mappings["naziv"] if table_name == "Poslodavac" else br.Zadaci_za_odabir_Mappings["id_zadatak"]
+            queryParams.append(f"filter__{field}__contains={term}")
+        else:
+            queryParams.append(f"search={term}")
+
+    public = not request["coordinator"]
+    def project(row):
+        if not public:
+            return row
+        if table_name == "Poslodavac":
+            keys = ("naziv", "web", "direktor", "maticni_broj", "OIB", "adresa", "logo")
+        else:
+            if (row.get("voditelj_odobrio") or {}).get("value") != "odobreno":
+                return None
+            keys = ("id_zadatak", "voditelj_odobrio", "Poslodavac", "poslodavac_email", "broj_studenata",
+                    "dostupno_mjesta", "preferirane_tehnologije", "preferencije_za_studenta", "potrebno_imati",
+                    "trajanje_sati", "zeljeno_okvirno_vrijeme_pocetka", "angazman_fipu", "napomena",
+                    "opis_zadatka", "selekcija", "proces_selekcije", "lokacija")
+        return {k: row[k] for k in ("id", *keys) if k in row}
 
     row_id = request.rel_url.query.get("id")
     if row_id:
+        if not row_id.isascii() or not row_id.isdigit() or int(row_id) < 1:
+            raise aiohttp.web.HTTPBadRequest()
         row_data = client.get_row(table_id, row_id)
         if "error" in row_data:
             logger.error("Error fetching row data: %s", row_data["error"])
@@ -1130,6 +1182,9 @@ async def fetch_table_rows(request):
                 status=row_data["status_code"],
                 content_type="application/json",
             )
+        row_data["data"] = project(row_data["data"])
+        if row_data["data"] is None:
+            raise aiohttp.web.HTTPNotFound()
         logger.info(
             "Successfully fetched row data for table: %s, row_id: %s",
             table_name,
@@ -1147,6 +1202,9 @@ async def fetch_table_rows(request):
             status=rows["status_code"],
             content_type="application/json",
         )
+    if public:
+        results = [item for row in rows["data"]["results"] if (item := project(row)) is not None]
+        rows["data"] = {"count": len(results), "results": results}
     logger.info("Successfully fetched rows for table: %s", table_name)
     return aiohttp.web.Response(text=json.dumps(rows), content_type="application/json")
 
@@ -1161,7 +1219,7 @@ async def direct_upload_to_baserow(request):
 
     assert field.name == "file"
     file_content = await field.read(decode=True)
-    file_name = field.filename
+    file_name = uuid.uuid4().hex + os.path.splitext(os.path.basename(field.filename))[1][:12]
 
     temp_dir = tempfile.gettempdir()
     temp_filepath = os.path.join(temp_dir, file_name)
@@ -1209,7 +1267,7 @@ async def upload_to_baserow(request):
     assert field.name == "file"
 
     # Generate a unique filename using UUID
-    filename = f"{uuid.uuid4()}_{field.filename}"
+    filename = f"{uuid.uuid4()}_{os.path.basename(field.filename)}"
     file_content = await field.read(decode=True)
 
     with open(filename, "wb") as f:
@@ -1233,7 +1291,7 @@ import asyncio
 
 
 async def store_file_in_baserow(
-    request, table_id, field_name, field_value, table_mappings, file_field_name
+    request, table_id, field_name, field_value, table_mappings, file_field_name, row_id=None
 ):
     logger.info("Received request to store file in Baserow")
 
@@ -1265,9 +1323,8 @@ async def store_file_in_baserow(
             }
 
             client = BaserowClient()
-            row_id = client.get_row_id_by_attribute(
-                table_id, field_name, field_value, table_mappings
-            )
+            if row_id is None:
+                row_id = client.get_row_id_by_attribute(table_id, field_name, field_value, table_mappings)
 
             if not row_id:
                 logger.warning(
@@ -1328,6 +1385,7 @@ async def store_poslodavac_logo(request):
 
 @routes.post("/api/upload/pdf-dnevnik/{id_dnevnik_prakse}")
 async def store_pdf_dnevnik_prakse(request):
+    diary = owned_row(request, "Dnevnik_prakse", "id_dnevnik_prakse", request.match_info["id_dnevnik_prakse"], br.Dnevnik_prakse_Mappings)
     logger.info("Received request to store PDF internship diary")
 
     id_dnevnik_prakse = request.match_info.get("id_dnevnik_prakse")
@@ -1343,7 +1401,7 @@ async def store_pdf_dnevnik_prakse(request):
         "id_dnevnik_prakse",
         id_dnevnik_prakse,
         br.Dnevnik_prakse_Mappings,
-        "dnevnik_prakse_upload",
+        "dnevnik_prakse_upload", diary["id"],
     )
 
     if "error" in response:
@@ -1354,6 +1412,7 @@ async def store_pdf_dnevnik_prakse(request):
 
 @routes.post("/api/upload/pdf-ispunjena-potvrda/{id_dnevnik_prakse}")
 async def store_pdf_ispunjena_potvrda(request):
+    diary = owned_row(request, "Dnevnik_prakse", "id_dnevnik_prakse", request.match_info["id_dnevnik_prakse"], br.Dnevnik_prakse_Mappings)
     logger.info("Received request to store PDF filled confirmation")
 
     id_dnevnik_prakse = request.match_info.get("id_dnevnik_prakse")
@@ -1369,7 +1428,7 @@ async def store_pdf_ispunjena_potvrda(request):
         "id_dnevnik_prakse",
         id_dnevnik_prakse,
         br.Dnevnik_prakse_Mappings,
-        "ispunjena_potvrda_upload",
+        "ispunjena_potvrda_upload", diary["id"],
     )
 
     if "error" in response:
@@ -1382,7 +1441,6 @@ async def store_pdf_ispunjena_potvrda(request):
 async def complete_deletion(request):
     logger.info("Received request to delete data")
     data = await request.json()
-    logger.info("Received data: %s", data)
 
     process_instance_id = data.get("process_instance_id")
     id_preferencije = data.get("id_preferencije")
@@ -1499,7 +1557,7 @@ async def status_check(request):
 def run():
     global app
 
-    app = aiohttp.web.Application()
+    app = aiohttp.web.Application(middlewares=[access_control(bool(br.LOCAL_CONFIG) and os.getenv("ALLOW_LOCAL_DEMO") == "true")])
     app.add_routes(routes)
     cors = aiohttp_cors.setup(
         app,

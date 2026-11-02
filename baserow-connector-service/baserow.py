@@ -90,7 +90,7 @@ class BaserowClient:
         self, table_id, attribute_name, attribute_value, table_mappings
     ):
         parameters = [
-            f"filter__{table_mappings[attribute_name]}__equal={attribute_value}"
+            f"filter__{table_mappings[attribute_name]}__equal={quote(str(attribute_value), safe='')}"
         ]
         # print(f"Filtering by: {parameters}")
 
@@ -103,7 +103,6 @@ class BaserowClient:
         try:
             url = self.get_table_url(table_id)
             response = requests.post(url, headers=self.headers, json=data)
-            print("response", response.content)
             return self.handle_response(response)
         except Exception as e:
             print(e)

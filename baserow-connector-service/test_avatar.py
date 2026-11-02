@@ -2,7 +2,8 @@ import unittest
 from unittest.mock import Mock, patch
 from aiohttp import FormData, web
 from aiohttp.test_utils import TestClient, TestServer
-from avatar import authenticated_email, register_avatar_route, validate_avatar
+from access import access_control, authenticated_email
+from avatar import register_avatar_route, validate_avatar
 
 
 class AvatarValidationTests(unittest.TestCase):
@@ -16,14 +17,14 @@ class AvatarValidationTests(unittest.TestCase):
         with self.assertRaises(web.HTTPUnauthorized):
             authenticated_email({"X-Local-User": "admin@local.test"})
         self.assertEqual(authenticated_email({"X-Local-User": "admin@local.test"}, True), "admin@local.test")
-        with patch("avatar.verify_oauth2_token", return_value={"email": "student@unipu.hr", "email_verified": True, "hd": "unipu.hr"}) as verify:
+        with patch("access.verify_oauth2_token", return_value={"exp": 9900000000, "email": "student@unipu.hr", "email_verified": True, "hd": "unipu.hr"}) as verify:
             self.assertEqual(authenticated_email({"Authorization": "Bearer signed-token"}), "student@unipu.hr")
             self.assertEqual(verify.call_args.args[0], "signed-token")
             self.assertTrue(verify.call_args.args[2].endswith(".apps.googleusercontent.com"))
-        with patch("avatar.verify_oauth2_token", side_effect=ValueError("expired")), self.assertRaises(web.HTTPUnauthorized):
+        with patch("access.verify_oauth2_token", side_effect=ValueError("expired")), self.assertRaises(web.HTTPUnauthorized):
             authenticated_email({"Authorization": "Bearer expired"})
-        with patch("avatar.verify_oauth2_token", return_value={"email": "someone@example.com", "email_verified": True}), self.assertRaises(web.HTTPUnauthorized):
-            authenticated_email({"Authorization": "Bearer signed-token"})
+        with patch("access.verify_oauth2_token", return_value={"exp": 9900000000, "email": "someone@example.com", "email_verified": True}), self.assertRaises(web.HTTPForbidden):
+            authenticated_email({"Authorization": "Bearer wrong-domain"})
 
 
 class AvatarRouteTests(unittest.IsolatedAsyncioTestCase):
@@ -32,8 +33,9 @@ class AvatarRouteTests(unittest.IsolatedAsyncioTestCase):
         self.backend.get_row_id_by_attribute.return_value = 7
         self.backend.update_row.return_value = {"data": {"avatar": "https://example.com/a.png"}}
         routes = web.RouteTableDef()
-        register_avatar_route(routes, self.backend, "students", {}, True)
-        app = web.Application()
+        register_avatar_route(routes, self.backend, "students", {})
+        with patch("access.service_token", return_value="x" * 32):
+            app = web.Application(middlewares=[access_control(True)])
         app.add_routes(routes)
         self.http = TestClient(TestServer(app))
         await self.http.start_server()

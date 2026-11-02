@@ -5,30 +5,6 @@ import tempfile
 from urllib.parse import urlsplit
 
 from aiohttp import web
-from google.auth.exceptions import GoogleAuthError
-from google.auth.transport.requests import Request
-from google.oauth2.id_token import verify_oauth2_token
-
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "182844940133-k5k1t08dposga8083n6nek2r4gjo9a7l.apps.googleusercontent.com")
-
-
-def authenticated_email(headers, local_dev=False):
-    if local_dev and headers.get("X-Local-User") in {"student@local.test", "admin@local.test"}:
-        return headers["X-Local-User"]
-    scheme, _, token = headers.get("Authorization", "").partition(" ")
-    if scheme != "Bearer" or not token:
-        raise web.HTTPUnauthorized()
-    try:
-        claims = verify_oauth2_token(token, Request(), GOOGLE_CLIENT_ID)
-    except (ValueError, GoogleAuthError):
-        raise web.HTTPUnauthorized()
-    email = claims.get("email", "")
-    # Existing records are keyed by email; accept only Google-authoritative email claims.
-    if not claims.get("email_verified") or not (claims.get("hd") or email.endswith("@gmail.com")):
-        raise web.HTTPUnauthorized()
-    return email
-
-
 def validate_avatar(data):
     avatar = data.get("avatar") if isinstance(data, dict) else None
     if not isinstance(avatar, str) or not avatar or len(avatar) > 2048:
@@ -85,11 +61,11 @@ async def upload_avatar(request, client, loop):
     return url
 
 
-def register_avatar_route(routes, client, table_id, mapping, local_dev=False):
+def register_avatar_route(routes, client, table_id, mapping):
     @routes.patch("/api/student/avatar")
     async def update_avatar(request):
         loop = asyncio.get_running_loop()
-        email = await loop.run_in_executor(None, authenticated_email, request.headers, local_dev)
+        email = request["email"]
         multipart = request.content_type == "multipart/form-data"
         if not multipart:
             try:
