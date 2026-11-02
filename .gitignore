@@ -1,5 +1,4 @@
-
-sendgrid-connector-service/.env
-sendgrid-connector-service/.env
-sendgrid-connector-service/.env
-sendgrid-connector-service/.env
+.env
+env.py
+*-venv/
+__pycache__/

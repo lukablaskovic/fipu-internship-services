@@ -40,12 +40,12 @@
             }
         },
         {
-            "label": "sendgrid-connector-service",
+            "label": "emailjs-connector-service",
             "type": "shell",
             "command": "cmd",
             "args": [
                 "/K",
-                "cd sendgrid-connector-service && conda activate sendgrid-connector-service && npx nodemon server.py"
+                "cd emailjs-connector-service && npx nodemon server.js"
             ],
             "problemMatcher": [],
             "group": {
@@ -63,7 +63,7 @@
             "dependsOn": [
                 "baserow-connector-service",
                 "pdf-connector-service",
-                "sendgrid-connector-service"
+                "emailjs-connector-service"
             ],
             "group": {
                 "kind": "build",

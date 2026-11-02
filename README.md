@@ -11,10 +11,11 @@ The Baserow Connector Service acts as a bridge between your BPMN model and Baser
 
 <b>Location: baserow-connector/README.md</b>
 
-2. SendGrid Connector Service 📧  
-Email communications are a vital part of internship applications. The SendGrid Connector Service integrates with SendGrid, a cloud-based email delivery service, to handle all email-related tasks. This includes sending out application confirmations, interview invites, and more.
+2. EmailJS Connector Service 📧
 
-<b>Location: sendgrid-connector/README.md</b>
+Email communications are a vital part of internship applications. The EmailJS Connector Service integrates with EmailJS, a cloud-based email delivery service, to handle all email-related tasks. This includes sending out application confirmations, interview invites, and more.
+
+<b>Location: <a href="emailjs-connector-service/README.md">emailjs-connector-service/README.md</a></b>
 
 3. PDF Connector Service 📄  
 Documents such as resumes, cover letters, and forms are integral to internship applications. The PDF Connector Service assists in managing and processing these PDF documents, including uploading, downloading, and any necessary conversions or edits.

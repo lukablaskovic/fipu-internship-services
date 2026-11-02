@@ -24,10 +24,10 @@ jobs:
           docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/fp-baserow-connector-service:latest ./baserow-connector-service
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/fp-baserow-connector-service:latest
 
-      - name: Build and push fp-sendgrid-connector-service image
+      - name: Build and push fp-emailjs-connector-service image
         run: |
-          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/fp-sendgrid-connector-service:latest ./emailjs-connector-service
-          docker push ${{ secrets.DOCKERHUB_USERNAME }}/fp-sendgrid-connector-service:latest
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/fp-emailjs-connector-service:latest ./emailjs-connector-service
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/fp-emailjs-connector-service:latest
 
       - name: Build and push fp-pdf-connector-service image
         run: |

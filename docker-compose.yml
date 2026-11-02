@@ -8,12 +8,18 @@ services:
       - "8080:8080"
     container_name: baserow-connector-container
 
-  sendgrid-connector:
+  emailjs-connector:
     build:
-      context: ./sendgrid-connector-service
+      context: ./emailjs-connector-service
+    environment:
+      PORT: 8083
+      SERVICE_ID: ${EMAILJS_SERVICE_ID}
+      TEMPLATE_ID: ${EMAILJS_TEMPLATE_ID}
+      PUBLIC_KEY: ${EMAILJS_PUBLIC_KEY}
+      PRIVATE_KEY: ${EMAILJS_PRIVATE_KEY}
     ports:
-      - "8081:8081"
-    container_name: sendgrid-connector-container
+      - "8083:8083"
+    container_name: emailjs-connector-container
 
   pdf-connector:
     build:
