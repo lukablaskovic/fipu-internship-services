@@ -1175,7 +1175,7 @@ async def fetch_table_rows(request):
             text=json.dumps(row_data), content_type="application/json"
         )
 
-    rows = client.get_table_rows(table_id, queryParams)
+    rows = client.get_table_rows(table_id, queryParams, all_pages=table_name == "Poslodavac")
     if "error" in rows:
         logger.error("Error fetching rows: %s", rows["error"])
         return aiohttp.web.Response(

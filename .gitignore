@@ -2,3 +2,6 @@
 env.py
 *-venv/
 __pycache__/
+
+# Private Sudski registar deployment credentials.
+.env.sudreg

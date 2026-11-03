@@ -67,7 +67,7 @@ class BaserowClient:
         response = requests.get(url, headers=self.headers)
         return self.handle_response(response)
 
-    def get_table_rows(self, table_id, parameters=None):
+    def get_table_rows(self, table_id, parameters=None, all_pages=False):
         url = self.get_table_url(table_id)
         print("url", url)
         if parameters:
@@ -78,7 +78,17 @@ class BaserowClient:
 
         response = requests.get(url, headers=self.headers)
 
-        return self.handle_response(response)
+        result = self.handle_response(response)
+        page = 1
+        while all_pages and "data" in result and result["data"].get("next"):
+            page += 1
+            response = requests.get(url, headers=self.headers, params={"page": page})
+            following = self.handle_response(response)
+            if "error" in following:
+                return following
+            result["data"]["results"].extend(following["data"]["results"])
+            result["data"]["next"] = following["data"].get("next")
+        return result
 
     def get_row(self, table_id, row_id):
         url = self.get_table_url(table_id, row_id)
