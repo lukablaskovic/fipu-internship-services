@@ -62,13 +62,15 @@ async def upload_avatar(request, client, loop):
 
 
 def register_avatar_route(routes, client, profile_table):
+    @routes.delete("/api/student/avatar")
     @routes.patch("/api/student/avatar")
     async def update_avatar(request):
         loop = asyncio.get_running_loop()
         table_id, mapping = profile_table(request["coordinator"])
         email = request["email"]
-        multipart = request.content_type == "multipart/form-data"
-        if not multipart:
+        avatar = ""
+        multipart = request.method == "PATCH" and request.content_type == "multipart/form-data"
+        if request.method == "PATCH" and not multipart:
             try:
                 avatar = validate_avatar(await request.json())
             except ValueError:

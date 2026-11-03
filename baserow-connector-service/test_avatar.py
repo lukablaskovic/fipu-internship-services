@@ -63,6 +63,22 @@ class AvatarRouteTests(unittest.IsolatedAsyncioTestCase):
         response = await self.http.patch("/api/student/avatar", json=data, headers=headers)
         self.assertEqual(response.status, 404)
 
+    async def test_remove_only_own_avatar(self):
+        path = "/api/student/avatar"
+        response = await self.http.delete(path)
+        self.assertEqual(response.status, 401)
+        self.backend.update_row.assert_not_called()
+        headers = {"X-Local-User": "student@local.test"}
+        for _ in range(2):
+            response = await self.http.delete(path + "?email=other@local.test", headers=headers)
+            self.assertEqual(response.status, 200)
+            self.assertEqual(await response.json(), {"avatar": ""})
+            self.backend.get_row_id_by_attribute.assert_called_with("students", "email", "student@local.test", {})
+            self.backend.update_row.assert_called_with("students", 7, {"avatar": ""})
+        self.backend.update_row.return_value = {"error": "unavailable"}
+        response = await self.http.delete(path, headers=headers)
+        self.assertEqual(response.status, 502)
+
     async def upload(self, data=b"\x89PNG\r\n\x1a\nimage", mime="image/png", headers=None):
         form = FormData()
         form.add_field("file", data, filename="../../photo.png", content_type=mime)
