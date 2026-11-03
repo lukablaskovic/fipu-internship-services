@@ -102,6 +102,8 @@ def access_control(local_dev):
             if not (name in SELF or catalog or own_diary or (request["coordinator"] and admin_route)):
                 raise web.HTTPForbidden()
             if name == "list_administrators":
+                if email != "lblaskovi@unipu.hr":
+                    raise web.HTTPForbidden()
                 request["administrator_emails"] = sorted(admins)
         response = await handler(request)
         response.headers["Cache-Control"] = "private, no-store"
